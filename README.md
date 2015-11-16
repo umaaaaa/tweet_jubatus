@@ -23,10 +23,10 @@ $ sudo apt-get install jubatus mecab-jumandic-utf8
 ```
 $ source /opt/jubatus/profile
 ```
-今回は、Pythonを使用するので、pipを使ってJubatusモジュールをインストールしましょう。
+今回は、Pythonを使用するので、pipを使ってJubatusモジュールをインストールしましょう。あとは今回必要なモジュールもまとめてインストールしてしまいましょう
 
 ```
-$ sudo pip install jubatus
+$ pip install -r requirements.txt
 ```
 
 ###MongoDB
