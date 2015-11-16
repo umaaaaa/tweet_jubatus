@@ -64,6 +64,22 @@ $ sudo apt-get install python-mecab
 ##Twitterの検索ワード取得
 辰巳PAの検問情報は``無料車検``という隠語で表現されたりします。なので今回は、``辰巳 車検``というワードを抽出したいと思います。抽出したワードはMongoDBの``tweets``という名前のコレクションに保存します。
 
+###oath_keyファイルの作成
+Twitter developページで取得したキーを `key_dict.py` という名前で保存しましょう
+
+```key_dict.py
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
+
+oath_key_dict = {
+        "consumer_key": "xxxxxxxxxxxxxxxx",
+        "consumer_secret": "xxxxxxxxxxxxxxxxxxxx",
+        "access_token": "xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "access_token_secret": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+}
+
+```
+
 ###教師データの作成
 Jubatusのクラスタリング(Classifier)には、教師データが必要となります。教師データを蓄積していくにはそれなりに日数が必要です。定期的に教師データを更新できるようなプログラムを書きます。  
 ``辰巳 車検``でヒットしたツイートを一つずつ表示し、現在検問が行われているツイートならば``t``を、そうでないならそれ以外を入力し、教師データを作成します。ちなみに、現在検問が行われているツイートは``true_collection``に、そうでないツイートは``false_collection``に入れられます。
@@ -77,92 +93,74 @@ import json
 import time, calendar
 import datetime
 import locale
+import key_dict
 from pymongo import MongoClient
 
-### Constants
-
 oath_key_dict = {
-    "consumer_key": "XXXXXXXXXXXXXXXXX",
-    "consumer_secret": "XXXXXXXXXXXXXXXXXXXXXX",
-    "access_token": "XXXXXXXXXXXXXXXXXXXXXXX",
-    "access_token_secret": "XXXXXXXXXXXXXXXXXXX"
+    "consumer_key": key_dict.oath_key_dict['consumer_key'],
+    "consumer_secret": key_dict.oath_key_dict['consumer_secret'],
+    "access_token": key_dict.oath_key_dict['access_token'],
+    "access_token_secret": key_dict.oath_key_dict['access_token_secret']
 }
 
-# MongoDBのIP
-con = MongoClient('XXX.XXX.XXX.XXX', 27017)
-db = con.tweetdb
-true_collection = db.true_collection
-false_collection = db.fase_collection
+class SearchTweets:
 
-### Functions
+    def YmdHMS(self, created_at):
+        st  = time.strptime(created_at, '%a %b %d %H:%M:%S +0000 %Y')
+        dt = datetime.datetime(st.tm_year,st.tm_mon,st.tm_mday,st.tm_hour,st.tm_min,st.tm_sec)
+        dst = datetime.datetime.strptime(created_at,'%a %b %d %H:%M:%S +0000 %Y')
+        # 世界標準時から日本時間にする
+        japan_dst = dst + datetime.timedelta(hours=9)
+        return japan_dst 
 
-def YmdHMS(created_at):
-    st  = time.strptime(created_at, '%a %b %d %H:%M:%S +0000 %Y')
-    dt = datetime.datetime(st.tm_year,st.tm_mon,st.tm_mday,st.tm_hour,st.tm_min,st.tm_sec)
-    dst = datetime.datetime.strptime(created_at,'%a %b %d %H:%M:%S +0000 %Y')
-#世界標準時から日本時間にする
-    japan_dst = dst + datetime.timedelta(hours=9)
-    return japan_dst
+    def get_tweet(self):
+        searchtweets = SearchTweets()
+        now = datetime.datetime.now()
+        now_minus_six = now - datetime.timedelta(hours=6)
+        tweets = searchtweets.tweet_search(u"車検 && 辰巳 exclude:retweets exclude:mentions", oath_key_dict)
+        tweets_dic = {} 
+        count = 0
+        
+        for tweet in tweets["statuses"]:
+            Created_at = searchtweets.YmdHMS(tweet["created_at"])
+            tweet_id = tweet[u'id_str']
+            text = tweet[u'text']
+            created_at = tweet[u'created_at']
+            user_id = tweet[u'user'][u'id_str']
+            user_description = tweet[u'user'][u'description']
+            screen_name = tweet[u'user'][u'screen_name']
 
-def get_tweet():
-    now = datetime.datetime.now()
-    now_minus_six = now - datetime.timedelta(hours=6)
-    # tweets = tweet_search(u"取り締まり && 299", oath_key_dict)
-    tweets = tweet_search(u"車検 && 辰巳 exclude:retweets exclude:mentions", oath_key_dict)
-    count = 0
-    tweet_list = {}
+            tweets_dic[count] = text
+            count += 1
 
-    for tweet in tweets["statuses"]:
-        Created_at = YmdHMS(tweet["created_at"])
-        tweet_id = tweet[u'id_str']
-        text = tweet[u'text']
-        created_at = tweet[u'created_at']
-        user_id = tweet[u'user'][u'id_str']
-        user_description = tweet[u'user'][u'description']
-        screen_name = tweet[u'user'][u'screen_name']
+        return tweets_dic
 
-        tweet_list[count] = text
-        count += 1
+    def create_oath_session(self, oath_key_dict):
+        oath = OAuth1Session(
+                oath_key_dict["consumer_key"],
+                oath_key_dict["consumer_secret"],
+                oath_key_dict["access_token"],
+                oath_key_dict["access_token_secret"]
+        )
+        return oath
 
-    return tweet_list
+    def tweet_search(self, search_word, oath_key_dict):
+        searchtweets = SearchTweets()
+        url = "https://api.twitter.com/1.1/search/tweets.json?"
+        params = {
+            "q": unicode(search_word),
+            "lang": "ja",
+            "result_type": "recent",
+            "count": "100"
+            }
+        oath = searchtweets.create_oath_session(oath_key_dict)
+        responce = oath.get(url, params = params)
+        if responce.status_code != 200:
+            print "Error code: %d" %(responce.status_code)
+            return None
+        tweets = json.loads(responce.text)
+        return tweets
 
-def create_oath_session(oath_key_dict):
-    oath = OAuth1Session(
-    oath_key_dict["consumer_key"],
-    oath_key_dict["consumer_secret"],
-    oath_key_dict["access_token"],
-    oath_key_dict["access_token_secret"]
-    )
-    return oath
-
-def tweet_search(search_word, oath_key_dict):
-    url = "https://api.twitter.com/1.1/search/tweets.json?"
-    params = {
-        "q": unicode(search_word),
-        "lang": "ja",
-        "result_type": "recent",
-        "count": "100"
-        }
-    oath = create_oath_session(oath_key_dict)
-    responce = oath.get(url, params = params)
-    if responce.status_code != 200:
-        print "Error code: %d" %(responce.status_code)
-        return None
-    tweets = json.loads(responce.text)
-    return tweets
-
-def trueOrFalse(tweet_list):
-    for tweet in tweet_list:
-        print tweet_list[tweet]
-        user_input = raw_input()
-        if user_input == 't':
-            true_collection.insert({'tweet':tweet_list[tweet]})
-        else:
-            false_collection.insert({'tweet':tweet_list[tweet]})
-
-if __name__ == '__main__':
-    tweet_list = get_tweet()
-    trueOrFalse(tweet_list)
 ```
 
 
@@ -175,57 +173,43 @@ $ sudo easy_install pymongo
 それでは、pymongoを用いてMongoDB内の値を取得するプログラムを作成しておきましょう。
 
 ```getmongo.py
-#usr/bin/env python
-# -*- coding:utf-8 -*-
+#!/usr/bin/env python
+# coding: utf-8
 
-from pymongo import MongoClient
+host = '192.168.33.10'
+port = 9199
+name = 'test2'
+
+import sys
 import json
+import random
 
-class convertMongo:
-    global true_col
-    global false_col
-    global col
-    # mongodbのIP
-    con = MongoClient('XXX.XXX.XXX.XXX', 27017)
-    db = con['tweetdb']
-    col = db.tweets
-    true_col = db.true_collection
-    false_col = db.false_collection
-    global dic
-    dic = {}
+import jubatus
+from jubatus.common import Datum
+from get_mongo import convert_mongo 
 
-    def getDic(self):
-        count = 0
-        for data in col.find():
-            del data['_id']
-        # BsonB$rJsonB$KJQ49
-            json_list = json.dumps(data)
-        # JsonB$r%G%#%/%7%g%J%j$KJQ49
-            dic[count] = json.loads(json_list)
-            count += 1
-        return dic
 
-    def getTrueDic(self):
-        count = 0
-        for data in true_col.find():
-            del data['_id']
-        # BsonB$rJsonB$KJQ49
-            json_list = json.dumps(data)
-        # JsonB$r%G%#%/%7%g%J%j$KJQ49
-            dic[count] = json.loads(json_list)
-            count += 1
-        return dic
+get_mongo = convert_mongo()
 
-    def getFalseDic(self):
-        count = 0
-        for data in false_col.find():
-            del data['_id']
-        # BsonB$rJsonB$KJQ49
-            json_list = json.dumps(data)
-        # JsonB$r%G%#%/%7%g%J%j$KJQ49
-            dic[count] = json.loads(json_list)
-            count += 1
-        return dic
+def train(client):
+    true_dic = get_mongo.get_true_dic()
+    false_dic = get_mongo.get_false_dic()
+    train_data = []
+
+    for line in true_dic:
+        tweet = true_dic[line]['tweet']
+        train_data.append(('true', Datum({'tweet':tweet})))
+    for line in false_dic:
+        tweet = false_dic[line]['tweet']
+        train_data.append(('false', Datum({'tweet':tweet})))
+
+    random.shuffle(train_data)
+
+    client.train(train_data)
+
+if __name__ == '__main__':
+    client = jubatus.Classifier(host, port, name)
+    train(client)
 ```
 
 ##Jubatusの利用
@@ -330,7 +314,7 @@ $ jubaclassifier -f config.json -t 0
 #!/usr/bin/env python
 # coding: utf-8
 
-host = '127.0.0.1'
+host = '192.168.33.10'
 port = 9199
 name = 'test2'
 
@@ -340,16 +324,14 @@ import random
 
 import jubatus
 from jubatus.common import Datum
-from getmongo import convertMongo
+from get_mongo import convert_mongo 
 
 
-getmongo = convertMongo()
+get_mongo = convert_mongo()
 
 def train(client):
-    # prepare training data
-    # predict the last ones (that are commented out)
-    true_dic = getmongo.getTrueDic()
-    false_dic = getmongo.getFalseDic()
+    true_dic = get_mongo.get_true_dic()
+    false_dic = get_mongo.get_false_dic()
     train_data = []
 
     for line in true_dic:
@@ -359,16 +341,14 @@ def train(client):
         tweet = false_dic[line]['tweet']
         train_data.append(('false', Datum({'tweet':tweet})))
 
-    # training data must be shuffled on online learning!
     random.shuffle(train_data)
 
-    # run train
     client.train(train_data)
 
 if __name__ == '__main__':
-    # connect to the jubatus
     client = jubatus.Classifier(host, port, name)
     train(client)
+
 ```
 そして実行をします。何も出なければ成功しています。
 
